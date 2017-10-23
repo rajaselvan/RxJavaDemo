@@ -1,70 +1,100 @@
 package com.chrisarriola.githubrxjava;
 
 import android.os.Bundle;
+import android.os.Parcelable;
 import android.support.v7.app.AppCompatActivity;
-import android.text.TextUtils;
-import android.util.Log;
-import android.view.View;
-import android.widget.Button;
-import android.widget.EditText;
 import android.widget.ListView;
+import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+
+import rx.Observable;
 import rx.Observer;
-import rx.Subscription;
 import rx.android.schedulers.AndroidSchedulers;
+import rx.functions.FuncN;
 import rx.schedulers.Schedulers;
+
+import static com.chrisarriola.githubrxjava.NewsApiService.API_KEY;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String TAG = MainActivity.class.getSimpleName();
-    private GitHubRepoAdapter adapter = new GitHubRepoAdapter();
-    private Subscription subscription;
+    private String className = MainActivity.class.getName();
+    private long startTime, endTime;
+    private List<Article> feedItems;
+    private NewsFeedAdapter adapter;
+    private List<String> sources = Arrays.asList("techcrunch", "bbc-sport", "espn-cric-info", "abc-news-au", "al-jazeera-english",
+            "ars-technica", "associated-press", "bbc-news", "bild",
+            "cnn", "engadget", "financial-times", "google-news", "mashable");
 
-    @Override protected void onCreate(Bundle savedInstanceState) {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
         final ListView listView = (ListView) findViewById(R.id.list_view_repos);
+        adapter = new NewsFeedAdapter();
         listView.setAdapter(adapter);
-
-        final EditText editTextUsername = (EditText) findViewById(R.id.edit_text_username);
-        final Button buttonSearch = (Button) findViewById(R.id.button_search);
-        buttonSearch.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                final String username = editTextUsername.getText().toString();
-                if (!TextUtils.isEmpty(username)) {
-                    getStarredRepos(username);
-                }
-            }
-        });
+        if (savedInstanceState == null) {
+            getNewsFeed(sources, API_KEY);
+        } else {
+            this.feedItems = savedInstanceState.<Article>getParcelableArrayList(className);
+            adapter.setArticles(feedItems);
+        }
     }
 
-    @Override protected void onDestroy() {
-        if (subscription != null && !subscription.isUnsubscribed()) {
-            subscription.unsubscribe();
-        }
+    @Override
+    protected void onDestroy() {
         super.onDestroy();
     }
 
-    private void getStarredRepos(String username) {
-        subscription = GitHubClient.getInstance()
-                                   .getStarredRepos(username)
-                                   .subscribeOn(Schedulers.io())
-                                   .observeOn(AndroidSchedulers.mainThread())
-                                   .subscribe(new Observer<List<GitHubRepo>>() {
-                                       @Override public void onCompleted() {
-                                           Log.d(TAG, "In onCompleted()");
-                                       }
+    @Override
+    public void onSaveInstanceState(Bundle outState) {
+        outState.putParcelableArrayList(className, (ArrayList<? extends Parcelable>) feedItems);
+        super.onSaveInstanceState(outState);
+    }
 
-                                       @Override public void onError(Throwable e) {
-                                           e.printStackTrace();
-                                           Log.d(TAG, "In onError()");
-                                       }
 
-                                       @Override public void onNext(List<GitHubRepo> gitHubRepos) {
-                                           Log.d(TAG, "In onNext()");
-                                           adapter.setGitHubRepos(gitHubRepos);
-                                       }
-                                   });
+    private void getNewsFeed(List<String> sources, String apiKey) {
+        startTime = System.currentTimeMillis();
+        NewsApiClient newsApiClient = NewsApiClient.getInstance();
+        List<Observable<ApiResponse>> callerList = new ArrayList<Observable<ApiResponse>>();
+
+        for (String source : sources) {
+            callerList.add(newsApiClient.getApiResponse(source, API_KEY).subscribeOn(Schedulers.newThread()).observeOn(AndroidSchedulers.mainThread()));
+        }
+
+        Observable.zip(
+                callerList,
+                new FuncN<List<Article>>() {
+
+                    @Override
+                    public List<Article> call(Object... args) {
+                        List<Article> totalList = new ArrayList<Article>();
+                        for (Object o : args) {
+                            totalList.addAll(((ApiResponse) o).getArticles());
+                        }
+                        return totalList;
+                    }
+                })
+                .subscribe(new Observer<List<Article>>() {
+                    @Override
+                    public void onCompleted() {
+
+                    }
+
+                    @Override
+                    public void onError(Throwable e) {
+
+                    }
+
+                    @Override
+                    public void onNext(List<Article> articles) {
+                        feedItems = articles;
+                        endTime = System.currentTimeMillis();
+                        adapter.setArticles(articles);
+                        Toast.makeText(getApplicationContext(), String.format("The time taken %1$s seconds", (endTime - startTime) / 1000.0), Toast.LENGTH_LONG).show();
+                    }
+                });
     }
 }
